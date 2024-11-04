@@ -21,7 +21,9 @@ run the python script.
 
 This python script will require port 8000 to be open on the firewall for the hosting server.
 
+
 HOW TO SETUP MOD SIDE:
+
 Have an ark server admin execute the following:
 
 
