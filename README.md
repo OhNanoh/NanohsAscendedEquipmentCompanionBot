@@ -24,11 +24,18 @@ This python script will require port 8000 to be open on the firewall for the hos
 HOW TO SETUP MOD SIDE:
 Have an ark server admin execute the following:
 
+
 cheat ScriptCommand SetupBot "Your arkserver domain or ip here"
 
+
 DO NOT INCLUDE HTTPS://
+
 Only the domain or ip
+
 Examples:
+
 cheat ScriptCommand SetupBot test.arkservers.com
+
 cheat ScriptCommand SetupBot 192.129.129.129
+
 
