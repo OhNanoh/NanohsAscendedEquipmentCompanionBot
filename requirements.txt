@@ -1,0 +1,5 @@
+discord~=2.3.2
+uvicorn~=0.32.0
+fastapi~=0.115.4
+pydantic~=2.9.2
+python-dotenv~=1.0.1
