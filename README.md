@@ -20,3 +20,15 @@ After the bot is setup and invited to your server, populating the UserConfig.INI
 run the python script.
 
 This python script will require port 8000 to be open on the firewall for the hosting server.
+
+HOW TO SETUP MOD SIDE:
+Have an ark server admin execute the following:
+
+cheat ScriptCommand SetupBot "Your arkserver domain or ip here"
+
+DO NOT INCLUDE HTTPS://
+Only the domain or ip
+Examples:
+cheat ScriptCommand SetupBot test.arkservers.com
+cheat ScriptCommand SetupBot 192.129.129.129
+
