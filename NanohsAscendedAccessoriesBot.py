@@ -56,6 +56,7 @@ app = FastAPI()
 
 db = SH.SQLiteHelper(DB_FILE, 'NAE')
 
+
 class ItemDropEvent(BaseModel):
     server_name: str
     user_id: str
@@ -67,6 +68,10 @@ class ItemDropEvent(BaseModel):
     had_4_leaf_clover: str
     server_drop_chance: str
     suid: str
+
+
+class CheckSuccess(BaseModel):
+    success: str
 
 
 def has_role(role_names):
@@ -102,6 +107,10 @@ def startup_event():
     """On Async.io start, start discord bot"""
     asyncio.create_task(bot.start(TOKEN))
 
+
+@app.post("checksuccess/")
+async def check_success(event: CheckSuccess):
+    print('Success!!')
 
 @app.post("/item-drop-events/")
 async def create_item_drop_event(event: ItemDropEvent):
