@@ -1,4 +1,8 @@
 # NanohsAscendedEquipementCompanionBot
+THIS REQUIRES PYTHON INSTALLED ON THE MACHINE YOU WANT THE BOT TO RUN ON.
+
+If you get an error about missing modules, open a command prompt in the folder the "requirements.txt" file is in and type "pip install -r requirements.txt" and press enter. 
+
 This bot was created after multiple requests from server owners to allow for a way to have their own top ten in their  discord servers. 
 
 
