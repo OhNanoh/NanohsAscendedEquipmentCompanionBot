@@ -41,28 +41,32 @@ class SQLiteHelper:
         self.__config_list = parse_table_config(self.__config)
         self.__establish_db_conn(db_name)
         self.db_name = db_name
-        self.__create_table(db_name, self.__config_list)
+        self.__create_table()
 
-    def __create_table(self, table_name, table_layout):
+    def __create_table(self):
         """Create SQLite db if it doesn't exist. """
-        
+
         table_name = self.db_name
         table_layout = self.__config_list
 
         __command_string__ = f"""CREATE TABLE IF NOT EXISTS {table_name} ("""
-        __primary_keys__ = 'PRIMARY KEY ('
+        primary_key_fields = []
+
 
         for line in table_layout:
             __command_string__ += f'{line[0]}, '
-            if line[1]:
-                __primary_keys__ += f"{line[0].split(' ')[0]}, "
+            if line[1]:  
+                primary_key_fields.append(line[0].split(' ')[0])
 
-        __command_string__ = __command_string__.rstrip(', ') + ')'
-        __primary_keys__ = __primary_keys__.rstrip(', ') + ')'
+        if primary_key_fields:  
+            __command_string__ += f'PRIMARY KEY ({", ".join(primary_key_fields)})'
+        else:
+            __command_string__ = __command_string__.rstrip(', ')
 
-        execute_command = f"""{__command_string__}, {__primary_keys__})"""
+        __command_string__ += ')'  
+
         try:
-            self.cursor.execute(execute_command)
+            self.cursor.execute(__command_string__)
             self.conn.commit()
         except sqlite3.OperationalError as se:
             logging.error(f'Exception Occurred: {se}')
