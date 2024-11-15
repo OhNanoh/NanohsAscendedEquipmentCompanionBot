@@ -109,7 +109,6 @@ async def create_item_drop_event(event: ItemDropEvent):
     if all(x for x in event_dict.values()):
         insert_item_drop(event_dict)
     else:
-        await send_discord_message(f'Failed Insert: {event_dict}')
         print(f'Failed to insert: {event_dict}')
 
 
