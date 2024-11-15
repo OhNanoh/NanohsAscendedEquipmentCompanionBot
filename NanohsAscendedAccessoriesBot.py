@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 import PythonModules.SQLiteHelper as SH
 import discord
@@ -6,6 +6,10 @@ from discord.ext import commands, tasks
 import os
 import asyncio
 from dotenv import load_dotenv
+import logging
+
+# Configure logging to suppress GET request errors
+logging.basicConfig(level=logging.WARNING)
 
 """
 This python script will require port 8000 to be open on your firewall.
@@ -31,9 +35,7 @@ https://discordjs.guide/preparations/adding-your-bot-to-servers.html
 
 After the bot is setup and invited to your server, populating the UserConfig.INI file with the token, guild, channel, daily top ten, and server name fields,
 run the python script.
-
 """
-
 
 load_dotenv("Config/UserConfig.ini")
 TOKEN = str(os.getenv('DISCORD_TOKEN'))
@@ -41,6 +43,7 @@ DB_FILE = 'Config/tableconfig.ini'
 CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL'))
 DO_DAILY_TOP_TEN = bool(os.getenv('DO_DAILY_TOP_TEN'))
 SERVER_NAME = str(os.getenv('SERVER_NAME'))
+LEADER_UPDATE = int(os.getenv('UPDATE_TIME'))
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -52,7 +55,6 @@ intents.typing = True
 intents.members = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 app = FastAPI()
-
 
 db = SH.SQLiteHelper(DB_FILE, 'NAE')
 
@@ -74,49 +76,27 @@ class CheckSuccess(BaseModel):
     success: str
 
 
-def has_role(role_names):
-    """Checking if user has the role specified in the decorator call this function is assigned to"""
-
-    def predicate(ctx):
-        for ind_role in role_names:
-            role = discord.utils.get(ctx.guild.roles, name=ind_role)
-            if role is None:
-                raise commands.CheckFailure(f"The role '{role}' does not exist on this server.")
-            if role not in ctx.author.roles:
-                pass
-            return True
-    return commands.check(predicate)
+@app.middleware("http")
+async def ignore_get_requests(request: Request, call_next):
+    if request.method == "GET":
+        client_ip = request.client.host
+        if 'X-Forwarded-For' in request.headers:
+            client_ip = request.headers['X-Forwarded-For'].split(",")[0].strip()
+        logging.warning(f"Ignored GET request from IP: {client_ip}")
+    return await call_next(request)
 
 
-async def send_discord_message(message):
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send(f'{message}')
-    else:
-        print("Channel not found")
-
-
-@bot.event
-async def on_ready():
-    """On Async.io starting the discord bot."""
-    print(f'{bot.user.name} has connected to Discord!')
-
-
-@app.on_event("startup")
-def startup_event():
-    """On Async.io start, start discord bot"""
-    asyncio.create_task(bot.start(TOKEN))
-
-
-@app.post("checksuccess/")
+@app.post("/checksuccess/")
 async def check_success(event: CheckSuccess):
     print('Success!!')
+
 
 @app.post("/item-drop-events/")
 async def create_item_drop_event(event: ItemDropEvent):
     """On POST request from Nanoh's ascended equipment mod, gather drop info, insert into db"""
 
     event_dict = event.dict()
+
     def insert_item_drop(info_dict):
         db.insert_data(query_columns=['server_name', 'user_id', 'character_name', 'item_dropped',
                                       'chance', 'dropped_by_dino', 'server_max_level',
@@ -133,7 +113,28 @@ async def create_item_drop_event(event: ItemDropEvent):
         print(f'Failed to insert: {event_dict}')
 
 
-#@has_role(['YourRoleHere', 'SecondRole']) - Use if you want to restrict this command to only users with a specific role, can take one role, or an array of roles
+async def send_discord_message(message):
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
+        await channel.send(f'{message}')
+    else:
+        print("Channel not found")
+
+
+@bot.event
+async def on_ready():
+    """On Async.io starting the discord bot."""
+    print(f'{bot.user.name} has connected to Discord!')
+    if not send_daily_message.is_running():
+        send_daily_message.start()
+
+
+@app.on_event("startup")
+def startup_event():
+    """On Async.io start, start discord bot"""
+    asyncio.create_task(bot.start(TOKEN))
+
+
 @bot.command(name='getitemdrops', help='Get your total number of item drops!')
 async def get_item_drops(ctx, user_id: str):
     """Get item drops for user. Takes a user's character id, which can be retrieved from the item in game."""
@@ -149,13 +150,12 @@ async def get_item_drops(ctx, user_id: str):
         await ctx.send(response)
 
 
-#@has_role(['YourRoleHere', 'SecondRole']) - Use if you want to restrict this command to only users with a specific role, can take one role, or an array of roles
 @bot.command(name='getservertopten', help='Get your servers total number of item drops!')
 async def get_server_top_ten(ctx):
     """Manual bot command for getting server top ten"""
 
-    user_data = db.select_data('user_id, character name, COUNT(*) as drop_count',
-                               f'server_name = {SERVER_NAME} GROUP BY user_id, character_name;')
+    user_data = db.select_data("user_id, character_name, COUNT(*) as drop_count",
+                               f"server_name LIKE '%{SERVER_NAME}%' GROUP BY user_id, character_name;")
     try:
         response = ""
         response += f"Top 10 Leaderboard for {SERVER_NAME}:\n"
@@ -169,14 +169,14 @@ async def get_server_top_ten(ctx):
         await ctx.send(response)
 
 
-@tasks.loop(hours=24)
+@tasks.loop(hours=LEADER_UPDATE)
 async def send_daily_message():
     """Send daily server top ten message. Requires CHANNEL_ID field in UserConfig to be filled out."""
 
     if DO_DAILY_TOP_TEN:
         channel = bot.get_channel(CHANNEL_ID)
-        user_data = db.select_data('user_id, character name, COUNT(*) as drop_count',
-                                   f'server_name = {SERVER_NAME} GROUP BY user_id, character_name;')
+        user_data = db.select_data("user_id, character_name, COUNT(*) as drop_count",
+                                   f"server_name LIKE '%{SERVER_NAME}%' GROUP BY user_id, character_name;")
         try:
             response = ""
             response += f"Top 10 Leaderboard for {SERVER_NAME}:\n"
