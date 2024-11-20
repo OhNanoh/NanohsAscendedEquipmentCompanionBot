@@ -8,6 +8,7 @@ import asyncio
 from dotenv import load_dotenv
 import logging
 from mcrcon import MCRcon
+from enum import Enum
 
 
 # Configure logging to suppress GET request errors
@@ -37,6 +38,12 @@ https://discordjs.guide/preparations/adding-your-bot-to-servers.html
 
 After the bot is setup and invited to your server, populating the UserConfig.INI file with the token, guild, channel, daily top ten, and server name fields,
 run the python script.
+
+Command usage:
+/rconcommand saveworld - Performs a worldsave
+/broadcastcolor {g}Test{/} {r}text{/} - Broadcasts a message that says "Test text" with Test being in green, and text being in red.
+/setupnametoeosandplayer Nanoh *EOSID* *PLAYERID* - sets up player with eos id and player id in db
+/giveitemtoplayer Nanoh '*itemblueprintpath*' *Quantity* *Quality* *is_bp* - Itemblueprint is the item blueprint path, Quantity is the amount, quality is the quality, is_bp is a 0 for no, 1 for yes
 """
 
 load_dotenv("Config/UserConfig.ini")
@@ -47,7 +54,7 @@ DO_DAILY_TOP_TEN = bool(os.getenv('DO_DAILY_TOP_TEN'))
 SERVER_NAME = str(os.getenv('SERVER_NAME'))
 LEADER_UPDATE = int(os.getenv('UPDATE_TIME'))
 HOST = os.getenv('RCON_IP')
-RCON_PORT = os.getenv('RCON_PORT')
+RCON_PORT = int(os.getenv('RCON_PORT'))
 RCON_PASS = os.getenv('RCON_PASS')
 
 intents = discord.Intents.default()
@@ -62,6 +69,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 app = FastAPI()
 
 db = SH.SQLiteHelper(DB_FILE, 'NAE')
+namedb = SH.SQLiteHelper(DB_FILE, 'NameToEOS')
 
 
 class ItemDropEvent(BaseModel):
@@ -81,6 +89,31 @@ class CheckSuccess(BaseModel):
     success: str
 
 
+def get_eos_from_name(name_in):
+    eos = namedb.select_data('eos', selection_where=f"NAME = '{name_in}'")
+    return eos[0]['eos']
+
+def get_playerid_from_name(name_in):
+    eos = namedb.select_data('playerid', selection_where=f"NAME = '{name_in}'")
+    return eos[0]['playerid']
+
+def format_rich_text(input_text):
+    color_map = {
+        "{g}": '<RichColor Color="0, 1, 0, 1">',
+        "{r}": '<RichColor Color="1, 0, 0, 1">',
+        "{b}": '<RichColor Color="0, 0, 1, 1">',
+        "{y}": '<RichColor Color="1, 1, 0, 1">',
+        "{c}": '<RichColor Color="0, 1, 1, 1">',
+        "{p}": '<RichColor Color="0.6, 0, 0.8, 1">',
+        "{o}": '<RichColor Color="1, 0.5, 0, 1">',
+        "{/}": '</>',
+    }
+
+    for placeholder, tag in color_map.items():
+        input_text = input_text.replace(placeholder, tag)
+    return input_text
+
+
 def execute_rcon(command):
     """Execute an RCON command against your server. Requires RCON_IP, RCON_PORT, and RCON_PASS setup in the UserConfig.ini file"""
     try:
@@ -90,6 +123,10 @@ def execute_rcon(command):
     except Exception as e:
         return f"Failed to connect or run command: {e}"
 
+def execute_color_broadcast(command):
+    formatted_text = format_rich_text(command)
+    with MCRcon(HOST, RCON_PASS, port=RCON_PORT) as mcr:
+        response = mcr.command(formatted_text)
 
 @app.middleware("http")
 async def ignore_get_requests(request: Request, call_next):
@@ -197,6 +234,49 @@ async def bot_rcon(ctx, *rcon_command):
 
     except Exception as e:
         await ctx.send(f'Failed to execute rcon command: {e}')
+
+
+@bot.command(name='broadcastcolor', help='Broadcasts a message with color formatting.')
+async def broadcast_color(ctx, *, rcon_command):
+    try:
+        await ctx.send("Executing colored broadcast...")
+        formatted_text = format_rich_text(rcon_command)
+        result = execute_rcon(f'broadcast {formatted_text}')
+        await ctx.send(f"RCON Response: {result}")
+    except Exception as e:
+        await ctx.send(f"Failed to execute colored broadcast: {e}")
+
+
+@bot.command(name='setupnametoeosandplayer', help='Broadcasts a message with color formatting.')
+async def setup_eos_name(ctx, name, eos, playerid):
+    try:
+        await ctx.send(f'Setting up {name} with EOS ID as {eos} and player id as {playerid}')
+        result = namedb.insert_data(['name', 'eos', 'playerid'], [name, eos, playerid])
+        await ctx.send(f'Finished: {result}')
+
+    except Exception as e:
+        await ctx.send(f'Failed to associate {name} with {eos}: {e}')
+
+
+@bot.command(name='geteos', help='Broadcasts a message with color formatting.')
+async def setup_eos_name(ctx, name):
+    try:
+        await ctx.send(f'Getting eos for {name}')
+        eos = get_eos_from_name(name)
+        await ctx.send(f'Eos for {name} is {eos}')
+    except Exception as e:
+        await ctx.send(f'Failed to get eos for {name}: {e}')
+
+@bot.command(name='givetoplayer', help='Broadcasts a message with color formatting.')
+async def gfi_give(ctx, playername, item, amount=1, quality=1, is_bp=0):
+    try:
+        await ctx.send(f'Attempting to give {playername} {amount} {item}.')
+        playerid = get_playerid_from_name(playername)
+        result = execute_rcon(f'GiveItemToPlayer {playerid} "Blueprint{item}" {amount} {quality} {is_bp}')
+        await ctx.send(f"{result}")
+
+    except Exception as e:
+        await ctx.send(f'Failed to give {item} to {playername}. Error: {e}')
 
 
 @tasks.loop(hours=LEADER_UPDATE)
