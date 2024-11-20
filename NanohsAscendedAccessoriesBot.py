@@ -7,6 +7,8 @@ import os
 import asyncio
 from dotenv import load_dotenv
 import logging
+from mcrcon import MCRcon
+
 
 # Configure logging to suppress GET request errors
 logging.basicConfig(level=logging.WARNING)
@@ -44,6 +46,9 @@ CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL'))
 DO_DAILY_TOP_TEN = bool(os.getenv('DO_DAILY_TOP_TEN'))
 SERVER_NAME = str(os.getenv('SERVER_NAME'))
 LEADER_UPDATE = int(os.getenv('UPDATE_TIME'))
+HOST = os.getenv('RCON_IP')
+RCON_PORT = os.getenv('RCON_PORT')
+RCON_PASS = os.getenv('RCON_PASS')
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -76,6 +81,16 @@ class CheckSuccess(BaseModel):
     success: str
 
 
+def execute_rcon(command):
+    """Execute an RCON command against your server. Requires RCON_IP, RCON_PORT, and RCON_PASS setup in the UserConfig.ini file"""
+    try:
+        with MCRcon(HOST, RCON_PASS, port=RCON_PORT) as mcr:
+            response = mcr.command(command)
+            return f"Server Response to '{command}': \n\n{response}"
+    except Exception as e:
+        return f"Failed to connect or run command: {e}"
+
+
 @app.middleware("http")
 async def ignore_get_requests(request: Request, call_next):
     if request.method == "GET":
@@ -94,7 +109,6 @@ async def check_success(event: CheckSuccess):
 @app.post("/item-drop-events/")
 async def create_item_drop_event(event: ItemDropEvent):
     """On POST request from Nanoh's ascended equipment mod, gather drop info, insert into db"""
-
     event_dict = event.dict()
 
     def insert_item_drop(info_dict):
@@ -163,9 +177,26 @@ async def get_server_top_ten(ctx):
         for line in enumerate(top_10_drops, 0):
             response += f'**#{line[0] + 1}** - {line[1]["character_name"]}: {line[1]["drop_count"]} drops\n'
         await ctx.send(response)
+
     except Exception as e:
         response = f"Unable to find data for: {SERVER_NAME}"
         await ctx.send(response)
+
+
+@bot.event
+async def on_ready():
+    print(f'{bot.user.name} has connected to Discord!')
+
+
+@bot.command(name='rconcommand', help='Executes an rcon command')
+async def bot_rcon(ctx, *rcon_command):
+    try:
+        await ctx.send(f"Executing rcon command...")
+        result = execute_rcon(' '.join(rcon_command))
+        await ctx.send(result)
+
+    except Exception as e:
+        await ctx.send(f'Failed to execute rcon command: {e}')
 
 
 @tasks.loop(hours=LEADER_UPDATE)
@@ -176,6 +207,7 @@ async def send_daily_message():
         channel = bot.get_channel(CHANNEL_ID)
         user_data = db.select_data("user_id, character_name, COUNT(*) as drop_count",
                                    f"server_name LIKE '%{SERVER_NAME}%' GROUP BY user_id, character_name;")
+
         try:
             response = ""
             response += f"Top 10 Leaderboard for {SERVER_NAME}:\n"
@@ -188,6 +220,7 @@ async def send_daily_message():
         except Exception as e:
             response = f"Unable to find data for: {SERVER_NAME}"
             await channel.send(response)
+
 
 if __name__ == "__main__":
     import uvicorn
