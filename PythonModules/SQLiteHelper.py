@@ -52,7 +52,6 @@ class SQLiteHelper:
         __command_string__ = f"""CREATE TABLE IF NOT EXISTS {table_name} ("""
         primary_key_fields = []
 
-
         for line in table_layout:
             __command_string__ += f'{line[0]}, '
             if line[1]:  
@@ -97,7 +96,7 @@ class SQLiteHelper:
 
     def select_data(self, selection_items, selection_where=None):
         """Select command for retrieving information from the database. selection_items is the column name.
-        selection_where is the optional where clause. Example: selection_where age > 10 will filter results to rows
+        selection_where is the optional where clause. Example: selection_where=age > 10 will filter results to rows
         where age is greater than 10
         """
 
