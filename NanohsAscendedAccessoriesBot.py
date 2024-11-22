@@ -10,9 +10,8 @@ from dotenv import load_dotenv
 import logging
 from mcrcon import MCRcon
 from datetime import datetime
-import time
+import json
 
-# Configure logging to suppress GET request errors
 logging.basicConfig(level=logging.WARNING)
 
 """
@@ -30,6 +29,9 @@ DISCORD_GUILD= (This is your discord's ID)
 DISCORD_CHANNEL= (This is the channel you would want the top ten being sent in)
 DO_DAILY_TOP_TEN= (This is whether or not you want the daily top ten task to run)
 SERVER_NAME= (Server name)
+UPDATE_TIME= (How often the leaderboard post updates)
+PLAYER_COUNT_UPDATE_TIME= (How often the server status embed updates)
+ARK_SERVERS= (json for server info): EXAMPLE - {"server_info": [{"server_name": "YOUR SERVER NAME HERE", "server_rcon_ip": "1.1.1.1", "server_rcon_port": 7777, "server_rcon_pass": "password", "override_embed_thumbnail": "URL TO PICTURE, THIS IS ALSO OPTIONAL"}, {"server_name": "second server", "server_rcon_ip": "2.2.2.2", "server_rcon_port": 7778, "server_rcon_pass": "password"}]}
 
 You can find a guide for creating a bot application for discord here:
 https://discordjs.guide/preparations/setting-up-a-bot-application.html#creating-your-bot
@@ -49,18 +51,20 @@ Command usage:
 Additional feature: Updates a Discord widget with the current number of players online on your ARK server.
 """
 
-load_dotenv("Config/UserConfig.ini")
-TOKEN = str(os.getenv('DISCORD_TOKEN'))
-DB_FILE = 'Config/tableconfig.ini'
-CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL'))
-DO_DAILY_TOP_TEN = bool(os.getenv('DO_DAILY_TOP_TEN'))
-SERVER_NAME = str(os.getenv('SERVER_NAME'))
-LEADER_UPDATE = int(os.getenv('UPDATE_TIME'))
-HOST = os.getenv('RCON_IP')
-RCON_PORT = int(os.getenv('RCON_PORT'))
-RCON_PASS = os.getenv('RCON_PASS')
+"""Try to load config"""
+try:
+    load_dotenv("Config/UserConfig.ini")
+    TOKEN = str(os.getenv('DISCORD_TOKEN'))
+    DB_FILE = 'Config/tableconfig.ini'
+    CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL'))
+    DO_DAILY_TOP_TEN = bool(os.getenv('DO_DAILY_TOP_TEN'))
+    SERVER_NAME = str(os.getenv('SERVER_NAME'))
+    LEADER_UPDATE = int(os.getenv('UPDATE_TIME'))
 
-CURRENT_TIME = None  # Initialize as None globally
+except Exception as e:
+    input(f'Failed to load config: {e}')
+
+CURRENT_TIME = None
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -98,20 +102,41 @@ class DateTime(BaseModel):
     datetime: str
 
 
-def execute_rcon(command):
+class ServerEmbed(BaseModel):
+    server_name: str
+    server_rcon_ip: str
+    server_rcon_port: int
+    server_rcon_pass: str
+    override_thumbnail: str
+
+
+def parse_server_env(env_string_in):
+    data = json.loads(env_string_in)
+    return data
+
+
+def create_server_embed(server_json):
+    created_embed = ServerEmbed(server_name=server_json["server_name"], server_rcon_ip=server_json["server_rcon_ip"],
+                                server_rcon_port=server_json["server_rcon_port"], server_rcon_pass=server_json["server_rcon_pass"],
+                                override_thumbnail=server_json["override_thumbnail"])
+    return created_embed
+
+
+def execute_rcon(command, host, rcon_pass, rcon_port):
     """Execute an RCON command against your server. Requires RCON_IP, RCON_PORT, and RCON_PASS setup in the UserConfig.ini file"""
     try:
-        with MCRcon(HOST, RCON_PASS, port=RCON_PORT) as mcr:
+        with MCRcon(host, rcon_pass, port=rcon_port) as mcr:
             response = mcr.command(command)
             return f"Server Response to '{command}': \n\n{response}"
     except Exception as e:
         return f"Failed to connect or run command: {e}"
 
 
-def execute_color_broadcast(command):
+def execute_color_broadcast(command, host, rcon_pass, rcon_port):
     formatted_text = format_rich_text(command)
-    with MCRcon(HOST, RCON_PASS, port=RCON_PORT) as mcr:
+    with MCRcon(host, rcon_pass, port=rcon_port) as mcr:
         response = mcr.command(formatted_text)
+        return f"Server Response to '{command}': \n\n{response}"
 
 
 def get_eos_from_name(name_in):
@@ -141,13 +166,23 @@ def format_rich_text(input_text):
     return input_text
 
 
-def get_player_count():
+def get_player_count(host, rcon_pass, rcon_port):
     """Fetch the current player count using RCON."""
     try:
-        with MCRcon(HOST, RCON_PASS, port=RCON_PORT) as mcr:
+        with MCRcon(host, rcon_pass, port=rcon_port) as mcr:
             response = mcr.command("listplayers")
-            player_count = response.count('\n')
-            return player_count
+            player_count = response.count('\n') - 1
+            lines = response.split("\n")
+            names = []
+            for line in lines:
+                if ". " in line and ", " in line:
+                    try:
+                        name = line.split(". ")[1].split(", ")[0]
+                        names.append(name)
+                    except IndexError:
+                        continue
+            return player_count, names
+
     except Exception as e:
         return f"Failed to fetch player count: {e}"
 
@@ -179,44 +214,57 @@ def calculate_uptime():
     return f"{days}d {hours}h {minutes}m {seconds}s"
 
 
-@tasks.loop(minutes=1)
+@tasks.loop(minutes=int(os.getenv('PLAYER_COUNT_UPDATE_TIME'), 5))
 async def update_player_count():
     """Check the player count and update an embed widget in Discord."""
-    try:
-        channel = bot.get_channel(CHANNEL_ID)
-        player_count = get_player_count()
-        await get_server_uptime()
-        uptime = calculate_uptime()
+    embed_info = parse_server_env(os.getenv("ARK_SERVERS"))
+    channel = bot.get_channel(CHANNEL_ID)
+    pinned_messages = await channel.pins()
 
-        if isinstance(player_count, int):
-            embed = Embed(
-                title="🎮 ARK Server Status 🎮",
-                description=f"**Current Players Online:** {player_count}",
-                color=Color.green() if player_count > 0 else Color.red()
+    for index, server in enumerate(embed_info["server_info"]):
+        try:
+            player_count, names = get_player_count(
+                host=server["server_rcon_ip"],
+                rcon_port=server["server_rcon_port"],
+                rcon_pass=server["server_rcon_pass"]
             )
-            embed.set_author(name="Nanoh's Ascended Bot",
-                             icon_url="https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png")
-            embed.set_thumbnail(
-                url="https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png")
-            # embed.add_field(name="Uptime", value=uptime, inline=True) Coming soon!
-            embed.add_field(name="Server Name", value=SERVER_NAME, inline=False)
-            embed.set_footer(text="Status updated automatically")
-            embed.timestamp = discord.utils.utcnow()
 
-            pinned_messages = await channel.pins()
-            if pinned_messages:
-                await pinned_messages[0].edit(embed=embed)
+            url = server.get(
+                "override_embed_thumbnail",
+                "https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
+            )
+
+            if isinstance(player_count, int):
+                embed = Embed(
+                    title=f"🎮 {server['server_name']} Status 🎮",
+                    description=f"**Current Players Online:** {player_count}",
+                    color=Color.green() if player_count > 0 else Color.red()
+                )
+                embed.set_author(
+                    name="NAE Companion Bot",
+                    icon_url="https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
+                )
+                embed.set_thumbnail(url=url)
+                embed.add_field(name="Server Name", value=server["server_name"], inline=False)
+                if player_count > 0:
+                    embed.add_field(name="Connected Players", value="\n".join(names))
+                embed.set_footer(text="Status updated automatically")
+                embed.timestamp = discord.utils.utcnow()
+
+                if index < len(pinned_messages):
+                    await pinned_messages[index].edit(embed=embed)
+                else:
+                    sent_message = await channel.send(embed=embed)
+                    await sent_message.pin()
+
             else:
-                sent_message = await channel.send(embed=embed)
-                await sent_message.pin()
-        else:
-            logging.warning(f"Failed to update player count: {player_count}")
+                logging.warning(f"Failed to update player count for {server['server_name']}: {player_count}")
 
-    except Exception as e:
-        logging.error(f"Error updating player count: {e}")
+        except Exception as e:
+            logging.error(f"Error updating player count for {server['server_name']}: {e}")
 
 
-@tasks.loop(hours=LEADER_UPDATE)
+@tasks.loop(hours=int(os.getenv("UPDATE_TIME"), 24))
 async def send_daily_message():
     """Send daily server top ten message. Requires CHANNEL_ID field in UserConfig to be filled out."""
 
