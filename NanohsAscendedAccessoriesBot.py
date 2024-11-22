@@ -220,48 +220,48 @@ async def update_player_count():
     embed_info = parse_server_env(os.getenv("ARK_SERVERS"))
     channel = bot.get_channel(CHANNEL_ID)
     pinned_messages = await channel.pins()
-
-    for index, server in enumerate(embed_info["server_info"]):
-        try:
-            player_count, names = get_player_count(
-                host=server["server_rcon_ip"],
-                rcon_port=server["server_rcon_port"],
-                rcon_pass=server["server_rcon_pass"]
-            )
-
-            url = server.get(
-                "override_embed_thumbnail",
-                "https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
-            )
-
-            if isinstance(player_count, int):
-                embed = Embed(
-                    title=f"🎮 {server['server_name']} Status 🎮",
-                    description=f"**Current Players Online:** {player_count}",
-                    color=Color.green() if player_count > 0 else Color.red()
+    if embed_info:
+        for index, server in enumerate(embed_info["server_info"]):
+            try:
+                player_count, names = get_player_count(
+                    host=server["server_rcon_ip"],
+                    rcon_port=server["server_rcon_port"],
+                    rcon_pass=server["server_rcon_pass"]
                 )
-                embed.set_author(
-                    name="NAE Companion Bot",
-                    icon_url="https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
-                )
-                embed.set_thumbnail(url=url)
-                embed.add_field(name="Server Name", value=server["server_name"], inline=False)
-                if player_count > 0:
-                    embed.add_field(name="Connected Players", value="\n".join(names))
-                embed.set_footer(text="Status updated automatically")
-                embed.timestamp = discord.utils.utcnow()
 
-                if index < len(pinned_messages):
-                    await pinned_messages[index].edit(embed=embed)
+                url = server.get(
+                    "override_embed_thumbnail",
+                    "https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
+                )
+
+                if isinstance(player_count, int):
+                    embed = Embed(
+                        title=f"🎮 {server['server_name']} Status 🎮",
+                        description=f"**Current Players Online:** {player_count}",
+                        color=Color.green() if player_count > 0 else Color.red()
+                    )
+                    embed.set_author(
+                        name="NAE Companion Bot",
+                        icon_url="https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
+                    )
+                    embed.set_thumbnail(url=url)
+                    embed.add_field(name="Server Name", value=server["server_name"], inline=False)
+                    if player_count > 0:
+                        embed.add_field(name="Connected Players", value="\n".join(names))
+                    embed.set_footer(text="Status updated automatically")
+                    embed.timestamp = discord.utils.utcnow()
+
+                    if index < len(pinned_messages):
+                        await pinned_messages[index].edit(embed=embed)
+                    else:
+                        sent_message = await channel.send(embed=embed)
+                        await sent_message.pin()
+
                 else:
-                    sent_message = await channel.send(embed=embed)
-                    await sent_message.pin()
+                    logging.warning(f"Failed to update player count for {server['server_name']}: {player_count}")
 
-            else:
-                logging.warning(f"Failed to update player count for {server['server_name']}: {player_count}")
-
-        except Exception as e:
-            logging.error(f"Error updating player count for {server['server_name']}: {e}")
+            except Exception as e:
+                logging.error(f"Error updating player count for {server['server_name']}: {e}")
 
 
 @tasks.loop(hours=int(os.getenv("UPDATE_TIME"), 24))
