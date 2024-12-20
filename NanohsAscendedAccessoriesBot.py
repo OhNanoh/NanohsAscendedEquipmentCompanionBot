@@ -357,7 +357,7 @@ async def bot_rcon(ctx, server_index, *rcon_command):
     except Exception as e:
         await ctx.send(f'Failed to execute rcon command: {e}')
 
-@bot.command(name='rconcommand', help='Executes an rcon command')
+@bot.command(name='broadcastcolor', help='Executes an rcon command')
 async def color_rcon(ctx, server_index, *rcon_command):
 
     try:
