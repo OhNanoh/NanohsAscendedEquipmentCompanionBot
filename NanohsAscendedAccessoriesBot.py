@@ -4,6 +4,7 @@ import PythonModules.SQLiteHelper as SH
 import discord
 from discord import Embed, Color
 from discord.ext import commands, tasks
+from discord.errors import HTTPException
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -60,7 +61,6 @@ try:
     DO_DAILY_TOP_TEN = bool(os.getenv('DO_DAILY_TOP_TEN'))
     SERVER_NAME = str(os.getenv('SERVER_NAME'))
     LEADER_UPDATE = int(os.getenv('UPDATE_TIME'))
-
 except Exception as e:
     input(f'Failed to load config: {e}')
 
@@ -76,7 +76,6 @@ intents.typing = True
 intents.members = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 app = FastAPI()
-
 db = SH.SQLiteHelper(DB_FILE, 'NAE')
 namedb = SH.SQLiteHelper(DB_FILE, 'NameToEOS')
 
@@ -92,6 +91,8 @@ class ItemDropEvent(BaseModel):
     had_4_leaf_clover: str
     server_drop_chance: str
     suid: str
+    date: str | None
+    world_buff: str | None
 
 
 class CheckSuccess(BaseModel):
@@ -115,15 +116,27 @@ def parse_server_env(env_string_in):
     return data
 
 
+def server_host_info(index_in, json_in):
+    server = json_in.get('server_info')[index_in]
+    return {'host': server["server_rcon_ip"],
+            'port': server["server_rcon_port"],
+            'pass': server["server_rcon_pass"]}
+
+
 def create_server_embed(server_json):
-    created_embed = ServerEmbed(server_name=server_json["server_name"], server_rcon_ip=server_json["server_rcon_ip"],
-                                server_rcon_port=server_json["server_rcon_port"], server_rcon_pass=server_json["server_rcon_pass"],
+    """Requires ARK_SERVERS config to be filled out"""
+    created_embed = ServerEmbed(server_name=server_json["server_name"],
+                                server_rcon_ip=server_json["server_rcon_ip"],
+                                server_rcon_port=server_json["server_rcon_port"],
+                                server_rcon_pass=server_json["server_rcon_pass"],
                                 override_thumbnail=server_json["override_thumbnail"])
     return created_embed
 
 
 def execute_rcon(command, host, rcon_pass, rcon_port):
-    """Execute an RCON command against your server. Requires RCON_IP, RCON_PORT, and RCON_PASS setup in the UserConfig.ini file"""
+    """Execute an RCON command against your server.
+    Requires RCON_IP, RCON_PORT, and RCON_PASS setup in the UserConfig.ini file"""
+
     try:
         with MCRcon(host, rcon_pass, port=rcon_port) as mcr:
             response = mcr.command(command)
@@ -184,96 +197,115 @@ def get_player_count(host, rcon_pass, rcon_port):
             return player_count, names
 
     except Exception as e:
-        return f"Failed to fetch player count: {e}"
+        return 'Offline'
 
 
-async def get_server_uptime():
-    """Fetch the server's start time via RCON and update CURRENT_TIME."""
-    global CURRENT_TIME
-    try:
-        response = execute_rcon('cheat ScriptCommand GetDateTime')
-        print(response)
-        time_format = "%m-%d-%Y %H:%M:%S"
-        CURRENT_TIME = datetime.strptime(response.strip(), time_format)
-        return "Server start time updated"
-    except Exception as e:
-        return f"Error retrieving uptime: {e}"
-
-
-def calculate_uptime():
-    """Calculate the server uptime based on CURRENT_TIME."""
-    global CURRENT_TIME
-    if CURRENT_TIME is None:
-        return "Start time not available"
-
-    now = datetime.now()
-    elapsed_time = now - CURRENT_TIME
-    days = elapsed_time.days
-    hours, remainder = divmod(elapsed_time.seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{days}d {hours}h {minutes}m {seconds}s"
-
-
-@tasks.loop(minutes=int(os.getenv('PLAYER_COUNT_UPDATE_TIME'), 5))
+@tasks.loop(minutes=float(os.getenv('PLAYER_COUNT_UPDATE_TIME', 5.0)))
 async def update_player_count():
     """Check the player count and update an embed widget in Discord."""
-    embed_info = parse_server_env(os.getenv("ARK_SERVERS"))
-    channel = bot.get_channel(CHANNEL_ID)
-    pinned_messages = await channel.pins()
-    if embed_info:
-        for index, server in enumerate(embed_info["server_info"]):
-            try:
-                player_count, names = get_player_count(
+    try:
+        embed_info = parse_server_env(os.getenv("ARK_SERVERS"))
+        if not embed_info:
+            raise ValueError(f'Embed info was not properly parsed. Is ARK_SERVERS setup properly?')
+
+        channel = bot.get_channel(CHANNEL_ID)
+        if not channel:
+            raise ValueError(f'Channel not found. Is CHANNEL_ID setup?')
+
+        pinned_messages = await channel.pins()
+
+        if embed_info:
+            for index, server in enumerate(embed_info["server_info"]):
+
+                result = get_player_count(
                     host=server["server_rcon_ip"],
                     rcon_port=server["server_rcon_port"],
-                    rcon_pass=server["server_rcon_pass"]
+                    rcon_pass=server["server_rcon_pass"],
                 )
+
+                if isinstance(result, str):
+                    embed_description = f"**Server Offline**"
+                    embed_color = Color.red()
+                    player_count = None
+                    names = []
+                else:
+                    player_count, names = result
+
+                    if player_count == 0:
+                        embed_description = "**Server Online, but no players currently online**"
+                        embed_color = Color.yellow()
+                    elif player_count > 0:
+                        embed_description = f"**Current Players Online:** {player_count}"
+                        embed_color = Color.green()
+                    else:
+                        embed_description = "**Unexpected state**"
+                        embed_color = Color.red()
 
                 url = server.get(
                     "override_embed_thumbnail",
-                    "https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
+                    "https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh%20merch%20logo.png"
                 )
 
-                if isinstance(player_count, int):
-                    embed = Embed(
-                        title=f"🎮 {server['server_name']} Status 🎮",
-                        description=f"**Current Players Online:** {player_count}",
-                        color=Color.green() if player_count > 0 else Color.red()
-                    )
-                    embed.set_author(
-                        name="NAE Companion Bot",
-                        icon_url="https://raw.githubusercontent.com/OhNanoh/NanohsAscendedEquipmentCompanionBot/main/Nanoh's%20Ascended%20Equipment.png"
-                    )
-                    embed.set_thumbnail(url=url)
-                    embed.add_field(name="Server Name", value=server["server_name"], inline=False)
-                    if player_count > 0:
-                        embed.add_field(name="Connected Players", value="\n".join(names))
-                    embed.set_footer(text="Status updated automatically")
-                    embed.timestamp = discord.utils.utcnow()
 
-                    if index < len(pinned_messages):
+                embed = Embed(
+                    title=f"🎮 {server['server_name']} Status 🎮",
+                    description=embed_description,
+                    color=embed_color
+                )
+                embed.set_author(
+                    name="Nanoh's Bot",
+                    icon_url=url
+                )
+                embed.set_thumbnail(url=url)
+                embed.add_field(name="Server Name", value=server["server_name"], inline=False)
+
+                if player_count and names:
+                    embed.add_field(name="Connected Players", value="\n".join(names), inline=False)
+
+                embed.set_footer(text="Status updated automatically")
+                embed.timestamp = discord.utils.utcnow()
+
+                if index < len(pinned_messages):
+                    try:
                         await pinned_messages[index].edit(embed=embed)
-                    else:
+                    except Exception as e:
+                        print(f"Failed to edit pinned message for {server['server_name']}: {e}")
+                else:
+                    try:
                         sent_message = await channel.send(embed=embed)
                         await sent_message.pin()
+                    except Exception as e:
+                        print(f"Failed to send and pin message for {server['server_name']}: {e}")
 
-                else:
-                    logging.warning(f"Failed to update player count for {server['server_name']}: {player_count}")
+    except HTTPException as e:
+        retry_after = e.response.headers.get('Retry-After')
+        if retry_after:
+            logging.error(f'Rate limit hit. Try again after: {retry_after}')
 
-            except Exception as e:
-                logging.error(f"Error updating player count for {server['server_name']}: {e}")
+    except ValueError as e:
+        logging.error(f'Value error from update_player_count: {e}')
+
+    except Exception as e:
+        logging.error(f'Unhandled exception occurred: {e}')
 
 
-@tasks.loop(hours=int(os.getenv("UPDATE_TIME"), 24))
+@tasks.loop(hours=float(os.getenv('UPDATE_TIME', 1.0)))
 async def send_daily_message():
     """Send daily server top ten message. Requires CHANNEL_ID field in UserConfig to be filled out."""
 
-    if DO_DAILY_TOP_TEN:
-        channel = bot.get_channel(CHANNEL_ID)
-        user_data = db.select_data("user_id, character_name, COUNT(*) as drop_count",
-                                   f"server_name LIKE '%{SERVER_NAME}%' GROUP BY user_id, character_name;")
+    try:
+        if DO_DAILY_TOP_TEN:
+            channel = bot.get_channel(CHANNEL_ID)
+            if not channel:
+                raise ValueError('Channel failed to populate. Is CHANNEL_ID setup properly?')
 
-        try:
+            user_data = db.select_data("user_id, character_name, COUNT(*) as drop_count",
+                                       f"server_name LIKE '%{SERVER_NAME}%' GROUP BY user_id, character_name;")
+            if not user_data:
+                raise ValueError('user_data is blank, are there any entries in the db file?')
+            elif isinstance(user_data, str):
+                raise ValueError('user_data is blank, are there any entries in the db file?')
+
             response = ""
             response += f"Top 10 Leaderboard for {SERVER_NAME}:\n"
             response += f'Rank | Player Name | Number of Drops\n\n'
@@ -283,26 +315,82 @@ async def send_daily_message():
             await channel.purge(limit=10)
             await channel.send(response)
 
-        except Exception as e:
-            response = f"Unable to find data for: {SERVER_NAME}"
-            await channel.send(response)
+    except HTTPException as e:
+        retry_after = e.response.headers.get('Retry-After')
+        if retry_after:
+            logging.error(f'Rate limit hit. Try again after: {retry_after}')
+
+    except ValueError as e:
+        logging.error(f'Value Error from send_daily_message: {e}')
+
+    except Exception as e:
+        logging.error(f"Unable to find data for: {SERVER_NAME}, {e}")
 
 
 @bot.command(name='rconcommand', help='Executes an rcon command')
-async def bot_rcon(ctx, *rcon_command):
+async def bot_rcon(ctx, server_index, *rcon_command):
+
     try:
+        embed_info = parse_server_env(os.getenv("ARK_SERVERS"))
+        server_info = server_host_info(index_in=server_index, json_in=embed_info)
         await ctx.send(f"Executing rcon command...")
-        result = execute_rcon(' '.join(rcon_command))
-        await ctx.send(result)
+        result = execute_rcon(command=' '.join(rcon_command),
+                              host=server_info.get('host'),
+                              rcon_port=server_info.get('port'),
+                              rcon_pass=server_info.get('pass'))
+        if result:
+            await ctx.send(result)
+        else:
+            raise ValueError('Failed to get result')
+
+    except HTTPException as e:
+        retry_after = e.response.headers.get('Retry-After')
+        if retry_after:
+            retry_time = float(retry_after)
+            await asyncio.sleep(retry_time)
+            result = execute_rcon(' '.join(rcon_command))
+            await ctx.send(result)
+
+    except ValueError as e:
+        logging.error(f'Failed to execute the rcon command: {e}')
 
     except Exception as e:
         await ctx.send(f'Failed to execute rcon command: {e}')
 
+@bot.command(name='rconcommand', help='Executes an rcon command')
+async def color_rcon(ctx, server_index, *rcon_command):
+
+    try:
+        embed_info = parse_server_env(os.getenv("ARK_SERVERS"))
+        server_info = server_host_info(index_in=server_index, json_in=embed_info)
+        await ctx.send(f"Executing colored broadcast...")
+        result = execute_color_broadcast(command=' '.join(rcon_command),
+                              host=server_info.get('host'),
+                              rcon_port=server_info.get('port'),
+                              rcon_pass=server_info.get('pass'))
+        if result:
+            await ctx.send(result)
+        else:
+            raise ValueError('Failed to get result')
+
+    except HTTPException as e:
+        retry_after = e.response.headers.get('Retry-After')
+        if retry_after:
+            retry_time = float(retry_after)
+            await asyncio.sleep(retry_time)
+            result = execute_rcon(' '.join(rcon_command))
+            await ctx.send(result)
+
+    except ValueError as e:
+        logging.error(f'Failed to execute the rcon command: {e}')
+
+    except Exception as e:
+        await ctx.send(f'Failed to execute rcon command: {e}')
 
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} has connected to Discord!')
-    if not update_player_count.is_running():
+    if not update_player_count.is_running() and os.getenv('ARK_SERVERS'):
         update_player_count.start()
     if not send_daily_message.is_running() and os.getenv('DO_DAILY_TOP_TEN'):
         send_daily_message.start()
@@ -314,24 +402,13 @@ async def ignore_get_requests(request: Request, call_next):
         client_ip = request.client.host
         if 'X-Forwarded-For' in request.headers:
             client_ip = request.headers['X-Forwarded-For'].split(",")[0].strip()
-        logging.warning(f"Ignored GET request from IP: {client_ip}")
+        #logging.warning(f"Ignored GET request from IP: {client_ip}")
     return await call_next(request)
 
 
 @app.post("/checksuccess/")
 async def check_success(event: CheckSuccess):
     print('Success!!')
-
-
-@app.post("/SendDateTime/")
-async def get_date_time(event: DateTime):
-    global CURRENT_TIME
-    try:
-        time_format = "%m-%d-%Y %H:%M:%S"
-        CURRENT_TIME = datetime.strptime(event.datetime, time_format)
-        return {"status": "Start time updated", "start_time": event.datetime}
-    except ValueError as e:
-        return {"status": "Error", "message": str(e)}
 
 
 @app.post("/item-drop-events/")
@@ -351,7 +428,7 @@ async def create_item_drop_event(event: ItemDropEvent):
     if all(x for x in event_dict.values()):
         insert_item_drop(event_dict)
     else:
-        print(f'Failed to insert: {event_dict}')
+        logging.warning(f'Failed to insert: {event_dict}')
 
 
 @app.on_event("startup")
