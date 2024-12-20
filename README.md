@@ -8,11 +8,17 @@ This bot was created after multiple requests from server owners to allow for a w
 
 To get started, open the UserConfig.ini file under the config folder. You will want to fill out the following fields:
 
+
 DISCORD_TOKEN= (This will be the token generated after creating the discord app)
+
 DISCORD_GUILD= (This is your discord's ID)
+
 DISCORD_CHANNEL= (This is the channel you would want the top ten being sent in)
+
 DO_DAILY_TOP_TEN= (This is whether or not you want the daily top ten task to run)
+
 SERVER_NAME= (Server name)
+
 
 You can find a guide for creating a bot application for discord here:
 https://discordjs.guide/preparations/setting-up-a-bot-application.html#creating-your-bot
