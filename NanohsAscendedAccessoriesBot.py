@@ -1,6 +1,9 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 import PythonModules.SQLiteHelper as SH
+import PythonModules.ModConfigSync
 import discord
 from discord import Embed, Color
 from discord.ext import commands, tasks
@@ -99,6 +102,11 @@ class CheckSuccess(BaseModel):
     success: str
 
 
+class ModConfig(BaseModel):
+    mod_name: str
+    mod_config: dict
+
+
 class DateTime(BaseModel):
     datetime: str
 
@@ -109,6 +117,15 @@ class ServerEmbed(BaseModel):
     server_rcon_port: int
     server_rcon_pass: str
     override_thumbnail: str
+
+
+class SaveModConfig(BaseModel):
+    mod_name: str
+    mod_config: dict
+
+
+class LoadModConfig(BaseModel):
+    mod_name: str
 
 
 def parse_server_env(env_string_in):
@@ -430,6 +447,31 @@ async def create_item_drop_event(event: ItemDropEvent):
     else:
         logging.warning(f'Failed to insert: {event_dict}')
 
+
+@app.post("/item-drop-events/")
+async def save_mod_config(event: SaveModConfig):
+    ...
+
+
+@app.post("/item-drop-events/")
+async def load_mod_config(event: LoadModConfig):
+    ...
+
+@app.post("/saveconfig/")
+async def save_config(event: ModConfig):
+    print(event)
+    try:
+        PythonModules.ModConfigSync.handle_save_config("NanohsAscendedAccessories", event.mod_config)
+        print(event)
+        return "success"
+    except Exception as e:
+        print(e)
+        return "failed"
+
+@app.post("/loadconfig/")
+async def save_config():
+    config = PythonModules.ModConfigSync.handle_load_config("NanohsAscendedAccessories")
+    return config
 
 @app.on_event("startup")
 def startup_event():
